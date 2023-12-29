@@ -105,6 +105,15 @@ func main() {
 			entry.Argv = []string{"FLUSHALL"}
 			theWriter.Write(entry)
 		}
+	} else if v.IsSet("rocketmq_writer") {
+		opts := new(writer.RocketMQWriterOptions)
+		defaults.SetDefaults(opts)
+		err := v.UnmarshalKey("rocketmq_writer", opts)
+		if err != nil {
+			log.Panicf("failed to read the RocketMQWriter config entry. err: %v", err)
+		}
+		theWriter = writer.NewRocketMQWriter(opts)
+		log.Infof("create RocketMQWriter: %v", opts.NamesrvAddress)
 	} else {
 		log.Panicf("no writer config entry found")
 	}
