@@ -32,6 +32,8 @@ type SyncReaderOptions struct {
 	SyncRdb       bool   `mapstructure:"sync_rdb" default:"true"`
 	SyncAof       bool   `mapstructure:"sync_aof" default:"true"`
 	PreferReplica bool   `mapstructure:"prefer_replica" default:"false"`
+	Diskless      bool   `mapstructure:"disk_less" default:"false"`
+	ResumeOffset  int64  `mapstructure:"resume_offset" default:"0"`
 }
 
 type State string
@@ -87,7 +89,12 @@ func NewSyncStandaloneReader(opts *SyncReaderOptions) Reader {
 	r.stat.Address = opts.Address
 	r.stat.Status = kHandShake
 	r.stat.Dir = utils.GetAbsPath(r.stat.Name)
-	r.stat.AofReceivedOffset = readLastReplOffset(r.stat.Dir)
+	// 无盘传输, 同时可支持增量同步
+	if opts.Diskless {
+		r.stat.AofReceivedOffset = opts.ResumeOffset
+	} else {
+		r.stat.AofReceivedOffset = readLastReplOffset(r.stat.Dir)
+	}
 	return r
 }
 
@@ -98,6 +105,7 @@ func (r *syncStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 		r.sendReplconfListenPort()
 		fullReSync := r.sendPSync()
 		go r.sendReplconfAck() // start sent replconf ack
+		// TODO: rdb如何不落盘
 		if fullReSync {
 			// empty out of date file before full sync
 			utils.CreateEmptyDir(r.stat.Dir)
@@ -105,15 +113,26 @@ func (r *syncStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 			r.sendRDB(rdbFilePath)
 		}
 
-		// create aof file first
-		aofWriter := rotate.NewAOFWriter(r.stat.Name, r.stat.Dir, r.stat.AofReceivedOffset)
-		go r.receiveAOF(r.rd, aofWriter)
-		if r.opts.SyncAof {
-			r.stat.Status = kSyncAof
-			r.sendAOF(r.stat.AofReceivedOffset)
+		if r.opts.Diskless {
+			aofCh := make(chan []byte, 10)
+			go r.receiveAOFToBuf(r.rd, aofCh, r.stat.AofReceivedOffset)
+			if r.opts.SyncAof {
+				r.stat.Status = kSyncAof
+				r.sendAOFFromBuf(r.stat.AofReceivedOffset, aofCh)
+			}
+			close(aofCh)
+		} else {
+			// create aof file first
+			aofWriter := rotate.NewAOFWriter(r.stat.Name, r.stat.Dir, r.stat.AofReceivedOffset)
+			go r.receiveAOFToFile(r.rd, aofWriter)
+			if r.opts.SyncAof {
+				r.stat.Status = kSyncAof
+				r.sendAOFFromFile(r.stat.AofReceivedOffset)
+			}
+			aofWriter.Close()
 		}
+
 		r.client.Close()
-		aofWriter.Close()
 		// must be closed last so that other resources can be released
 		close(r.ch)
 	}()
@@ -253,8 +272,22 @@ func (r *syncStandaloneReader) receiveRDB() string {
 	return rdbFilePath
 }
 
-func (r *syncStandaloneReader) receiveAOF(rd io.Reader, aofWriter *rotate.AOFWriter) {
+func (r *syncStandaloneReader) receiveAOFToFile(rd io.Reader, aofWriter *rotate.AOFWriter) {
 	log.Debugf("[%s] start receiving aof data, and save to file", r.stat.Name)
+	r.receiveAOF(rd, func(buf []byte, size int) {
+		aofWriter.Write(buf[:size])
+	})
+}
+
+// 接收aof数据，缓存到ch中
+func (r *syncStandaloneReader) receiveAOFToBuf(rd io.Reader, ch chan<- []byte, offset int64) {
+	log.Debugf("[%s] start receiving aof data to channel", r.stat.Name)
+	r.receiveAOF(rd, func(buf []byte, size int) {
+		ch <- buf[:size]
+	})
+}
+
+func (r *syncStandaloneReader) receiveAOF(rd io.Reader, op func(buf []byte, size int)) {
 	buf := make([]byte, 16*1024) // 16KB is enough for writing file
 	for {
 		select {
@@ -267,7 +300,7 @@ func (r *syncStandaloneReader) receiveAOF(rd io.Reader, aofWriter *rotate.AOFWri
 			}
 			r.stat.AofReceivedBytes += int64(n)
 			r.stat.AofReceivedHuman = humanize.IBytes(uint64(r.stat.AofReceivedBytes))
-			aofWriter.Write(buf[:n])
+			op(buf, n)
 			r.stat.AofReceivedOffset += int64(n)
 		}
 	}
@@ -289,7 +322,7 @@ func (r *syncStandaloneReader) sendRDB(rdbFilePath string) {
 	log.Debugf("[%s] delete RDB file", r.stat.Name)
 }
 
-func (r *syncStandaloneReader) sendAOF(offset int64) {
+func (r *syncStandaloneReader) sendAOFFromFile(offset int64) {
 	time.Sleep(1 * time.Second) // wait for receiveAOF create aof file
 	aofReader := rotate.NewAOFReader(r.stat.Name, r.stat.Dir, offset)
 	defer aofReader.Close()
@@ -301,38 +334,58 @@ func (r *syncStandaloneReader) sendAOF(offset int64) {
 		default:
 			argv := client.ArrayString(r.client.Receive())
 			r.stat.AofSentOffset = aofReader.Offset()
-			// select
-			if strings.EqualFold(argv[0], "select") {
-				DbId, err := strconv.Atoi(argv[1])
-				if err != nil {
-					log.Panicf(err.Error())
-				}
-				r.DbId = DbId
-				continue
-			}
-			// ping
-			if strings.EqualFold(argv[0], "ping") {
-				continue
-			}
-			// replconf @AWS
-			if strings.EqualFold(argv[0], "replconf") {
-				continue
-			}
-			// opinfo @Aliyun
-			if strings.EqualFold(argv[0], "opinfo") {
-				continue
-			}
-			// sentinel
-			if strings.EqualFold(argv[0], "publish") && strings.EqualFold(argv[1], "__sentinel__:hello") {
-				continue
-			}
-
-			e := entry.NewEntry()
-			e.Argv = argv
-			e.DbId = r.DbId
-			r.ch <- e
+			r.sendAOF(argv)
 		}
 	}
+}
+
+// 中间这一层 主要负责解析aof字节
+func (r *syncStandaloneReader) sendAOFFromBuf(offset int64, ch chan []byte) {
+	reader := newChannelReader(ch)
+	r.client.SetBufioReader(bufio.NewReader(reader))
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		default:
+			argv := client.ArrayString(r.client.Receive())
+			//r.stat.AofSentOffset = aofReader.Offset()
+			r.sendAOF(argv)
+		}
+	}
+}
+
+func (r *syncStandaloneReader) sendAOF(argv []string) {
+	// select
+	if strings.EqualFold(argv[0], "select") {
+		DbId, err := strconv.Atoi(argv[1])
+		if err != nil {
+			log.Panicf(err.Error())
+		}
+		r.DbId = DbId
+		return
+	}
+	// ping
+	if strings.EqualFold(argv[0], "ping") {
+		return
+	}
+	// replconf @AWS
+	if strings.EqualFold(argv[0], "replconf") {
+		return
+	}
+	// opinfo @Aliyun
+	if strings.EqualFold(argv[0], "opinfo") {
+		return
+	}
+	// sentinel
+	if strings.EqualFold(argv[0], "publish") && strings.EqualFold(argv[1], "__sentinel__:hello") {
+		return
+	}
+
+	e := entry.NewEntry()
+	e.Argv = argv
+	e.DbId = r.DbId
+	r.ch <- e
 }
 
 // sendReplconfAck send replconf ack to master to keep heartbeat between redis-shake and source redis.
@@ -387,7 +440,7 @@ func readLastReplOffset(dir string) int64 {
 				log.Warnf("illegal file name of aof: %s", info.Name())
 				return nil
 			}
-			if baseOffset + info.Size() > offset {
+			if baseOffset+info.Size() > offset {
 				offset = baseOffset + info.Size()
 			}
 		}
