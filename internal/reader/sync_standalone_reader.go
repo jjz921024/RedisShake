@@ -24,15 +24,15 @@ import (
 )
 
 type SyncReaderOptions struct {
-	Cluster       bool   `mapstructure:"cluster" default:"false"`
+	Cluster       bool   `mapstructure:"cluster" default:"true"`
 	Address       string `mapstructure:"address" default:""`
 	Username      string `mapstructure:"username" default:""`
 	Password      string `mapstructure:"password" default:""`
 	Tls           bool   `mapstructure:"tls" default:"false"`
-	SyncRdb       bool   `mapstructure:"sync_rdb" default:"true"`
+	SyncRdb       bool   `mapstructure:"sync_rdb" default:"false"`
 	SyncAof       bool   `mapstructure:"sync_aof" default:"true"`
-	PreferReplica bool   `mapstructure:"prefer_replica" default:"false"`
-	Diskless      bool   `mapstructure:"disk_less" default:"false"`
+	PreferReplica bool   `mapstructure:"prefer_replica" default:"true"`
+	Diskless      bool   `mapstructure:"disk_less" default:"true"`
 	ResumeOffset  int64  `mapstructure:"resume_offset" default:"0"`
 }
 
