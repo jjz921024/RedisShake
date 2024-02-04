@@ -1,4 +1,4 @@
-package reader
+package utils
 
 import "io"
 
@@ -9,7 +9,7 @@ type ChannelReader struct {
 	buffered int
 }
 
-func newChannelReader(ch <-chan []byte) *ChannelReader {
+func NewChannelReader(ch <-chan []byte) *ChannelReader {
 	return &ChannelReader{ch: ch}
 }
 

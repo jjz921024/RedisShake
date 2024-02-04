@@ -105,12 +105,18 @@ func (r *syncStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 		r.sendReplconfListenPort()
 		fullReSync := r.sendPSync()
 		go r.sendReplconfAck() // start sent replconf ack
-		// TODO: rdb如何不落盘
 		if fullReSync {
-			// empty out of date file before full sync
-			utils.CreateEmptyDir(r.stat.Dir)
-			rdbFilePath := r.receiveRDB()
-			r.sendRDB(rdbFilePath)
+			if r.opts.Diskless {
+				rdbCh := make(chan []byte, 10)
+				go r.receiveRDBToBuf(rdbCh)
+				r.sendRDBFromBuf(rdbCh)
+				close(rdbCh)
+			} else {
+				// empty out of date file before full sync
+				utils.CreateEmptyDir(r.stat.Dir)
+				rdbFilePath := r.receiveRDBToFile()
+				r.sendRDBFromFile(rdbFilePath)
+			}
 		}
 
 		if r.opts.Diskless {
@@ -197,7 +203,38 @@ func (r *syncStandaloneReader) sendPSync() bool {
 	return true
 }
 
-func (r *syncStandaloneReader) receiveRDB() string {
+func (r *syncStandaloneReader) receiveRDBToFile() string {
+	// create rdb file
+	rdbFilePath, err := filepath.Abs(r.stat.Name + "/dump.rdb")
+	if err != nil {
+		log.Panicf(err.Error())
+	}
+	rdbFileHandle, err := os.OpenFile(rdbFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	if err != nil {
+		log.Panicf(err.Error())
+	}
+
+	r.receiveRDB(func (buf []byte) {
+		_, err = rdbFileHandle.Write(buf)
+		if err != nil {
+			log.Panicf(err.Error())
+		}
+	})
+
+	err = rdbFileHandle.Close()
+	if err != nil {
+		log.Panicf(err.Error())
+	}
+	return rdbFilePath
+}
+
+func (r *syncStandaloneReader) receiveRDBToBuf(rdbCh chan<- []byte) {
+	r.receiveRDB(func (buf []byte) {
+		rdbCh <- buf
+	})
+}
+
+func (r *syncStandaloneReader) receiveRDB(op func(buf []byte)) {
 	log.Debugf("[%s] source db is doing bgsave.", r.stat.Name)
 	r.stat.Status = kWaitBgsave
 	timeStart := time.Now()
@@ -229,17 +266,8 @@ func (r *syncStandaloneReader) receiveRDB() string {
 	r.stat.RdbFileSizeBytes = length
 	r.stat.RdbFileSizeHuman = humanize.IBytes(uint64(length))
 
-	// create rdb file
-	rdbFilePath, err := filepath.Abs(r.stat.Name + "/dump.rdb")
-	if err != nil {
-		log.Panicf(err.Error())
-	}
 	timeStart = time.Now()
-	log.Debugf("[%s] start receiving RDB. path=[%s]", r.stat.Name, rdbFilePath)
-	rdbFileHandle, err := os.OpenFile(rdbFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
-	if err != nil {
-		log.Panicf(err.Error())
-	}
+	log.Debugf("[%s] start receiving RDB", r.stat.Name)
 
 	// receive rdb
 	r.stat.Status = kReceiveRdb
@@ -256,20 +284,13 @@ func (r *syncStandaloneReader) receiveRDB() string {
 			log.Panicf(err.Error())
 		}
 		remainder -= int64(n)
-		_, err = rdbFileHandle.Write(buf[:n])
-		if err != nil {
-			log.Panicf(err.Error())
-		}
+
+		op(buf[:n])
 
 		r.stat.RdbReceivedBytes += int64(n)
 		r.stat.RdbReceivedHuman = humanize.IBytes(uint64(r.stat.RdbReceivedBytes))
 	}
-	err = rdbFileHandle.Close()
-	if err != nil {
-		log.Panicf(err.Error())
-	}
 	log.Debugf("[%s] save RDB finished. timeUsed=[%.2f]s", r.stat.Name, time.Since(timeStart).Seconds())
-	return rdbFilePath
 }
 
 func (r *syncStandaloneReader) receiveAOFToFile(rd io.Reader, aofWriter *rotate.AOFWriter) {
@@ -306,7 +327,7 @@ func (r *syncStandaloneReader) receiveAOF(rd io.Reader, op func(buf []byte, size
 	}
 }
 
-func (r *syncStandaloneReader) sendRDB(rdbFilePath string) {
+func (r *syncStandaloneReader) sendRDBFromFile(rdbFilePath string) {
 	// start parse rdb
 	log.Debugf("[%s] start sending RDB to target", r.stat.Name)
 	r.stat.Status = kSyncRdb
@@ -320,6 +341,18 @@ func (r *syncStandaloneReader) sendRDB(rdbFilePath string) {
 	// delete file
 	_ = os.Remove(rdbFilePath)
 	log.Debugf("[%s] delete RDB file", r.stat.Name)
+}
+
+func (r *syncStandaloneReader) sendRDBFromBuf(rdbCh <-chan []byte) {
+	log.Debugf("[%s] start sending RDB to target from buf", r.stat.Name)
+	r.stat.Status = kSyncRdb
+	updateFunc := func(offset int64) {
+		r.stat.RdbSentBytes = offset
+		r.stat.RdbSentHuman = humanize.IBytes(uint64(offset))
+	}
+	rdbLoader := rdb.NewChLoader(r.stat.Name, updateFunc, rdbCh, r.ch)
+	r.DbId = rdbLoader.ParseRDB(r.ctx)
+	log.Debugf("[%s] send RDB finished", r.stat.Name)
 }
 
 func (r *syncStandaloneReader) sendAOFFromFile(offset int64) {
@@ -340,8 +373,8 @@ func (r *syncStandaloneReader) sendAOFFromFile(offset int64) {
 }
 
 // 中间这一层 主要负责解析aof字节
-func (r *syncStandaloneReader) sendAOFFromBuf(offset int64, ch chan []byte) {
-	reader := newChannelReader(ch)
+func (r *syncStandaloneReader) sendAOFFromBuf(offset int64, ch <-chan []byte) {
+	reader := utils.NewChannelReader(ch)
 	r.client.SetBufioReader(bufio.NewReader(reader))
 	for {
 		select {

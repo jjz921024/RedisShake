@@ -43,6 +43,8 @@ type Loader struct {
 	filPath string
 	fp      *os.File
 
+	rdbCh      <-chan []byte
+
 	ch         chan *entry.Entry
 	dumpBuffer bytes.Buffer
 
@@ -50,10 +52,19 @@ type Loader struct {
 	updateFunc func(int64)
 }
 
-func NewLoader(name string, updateFunc func(int64), filPath string, ch chan *entry.Entry) *Loader {
+func NewLoader(name string, updateFunc func(int64), filePath string, ch chan *entry.Entry) *Loader {
 	ld := new(Loader)
 	ld.ch = ch
-	ld.filPath = filPath
+	ld.filPath = filePath
+	ld.name = name
+	ld.updateFunc = updateFunc
+	return ld
+}
+
+func NewChLoader(name string, updateFunc func(int64), rdbCh <-chan []byte, ch chan *entry.Entry) *Loader {
+	ld := new(Loader)
+	ld.ch = ch
+	ld.rdbCh = rdbCh
 	ld.name = name
 	ld.updateFunc = updateFunc
 	return ld
@@ -63,17 +74,24 @@ func NewLoader(name string, updateFunc func(int64), filPath string, ch chan *ent
 // return repl stream db id
 func (ld *Loader) ParseRDB(ctx context.Context) int {
 	var err error
-	ld.fp, err = os.OpenFile(ld.filPath, os.O_RDONLY, 0666)
-	if err != nil {
-		log.Panicf("open file failed. file_path=[%s], error=[%s]", ld.filPath, err)
-	}
-	defer func() {
-		err = ld.fp.Close()
+	var rd *bufio.Reader
+	if ld.filPath != "" {
+		ld.fp, err = os.OpenFile(ld.filPath, os.O_RDONLY, 0666)
 		if err != nil {
-			log.Panicf("close file failed. file_path=[%s], error=[%s]", ld.filPath, err)
+			log.Panicf("open file failed. file_path=[%s], error=[%s]", ld.filPath, err)
 		}
-	}()
-	rd := bufio.NewReader(ld.fp)
+		defer func() {
+			err = ld.fp.Close()
+			if err != nil {
+				log.Panicf("close file failed. file_path=[%s], error=[%s]", ld.filPath, err)
+			}
+		}()
+		rd = bufio.NewReader(ld.fp)
+	} else {
+		reader := utils.NewChannelReader(ld.rdbCh)
+		rd = bufio.NewReader(reader)
+	}
+
 	// magic + version
 	buf := make([]byte, 9)
 	_, err = io.ReadFull(rd, buf)
