@@ -2,7 +2,6 @@ package server
 
 import (
 	"RedisShake/internal/config"
-	"RedisShake/internal/function"
 	"RedisShake/internal/log"
 	"RedisShake/internal/reader"
 	"RedisShake/internal/status"
@@ -124,16 +123,8 @@ func CreateAndStartTask(ctx context.Context, v *viper.Viper) (*syncTask, error) 
 			e.Parse()
 			status.AddReadCount(e.CmdName)
 
-			// filter
-			log.Debugf("function before: %v", e)
-			entries := function.RunFunction(e)
-			log.Debugf("function after: %v", entries)
-
-			for _, entry := range entries {
-				entry.Parse()
-				theWriter.Write(entry)
-				status.AddWriteCount(entry.CmdName)
-			}
+			theWriter.Write(e)
+			status.AddWriteCount(e.CmdName)
 		}
 	}()
 

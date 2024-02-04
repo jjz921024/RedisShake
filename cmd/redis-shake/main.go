@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"RedisShake/internal/config"
-	"RedisShake/internal/function"
 	"RedisShake/internal/log"
 	"RedisShake/internal/server"
 	"RedisShake/internal/utils"
@@ -25,8 +24,6 @@ func main() {
 	log.Init(config.Opt.Advanced.LogLevel, config.Opt.Advanced.LogFile, config.Opt.Advanced.Dir)
 	utils.ChdirAndAcquireFileLock()
 	utils.SetNcpu()
-	utils.SetPprofPort()
-	function.Init()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
