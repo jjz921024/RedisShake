@@ -1,7 +1,6 @@
 package status
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -15,7 +14,8 @@ func Handler(w http.ResponseWriter, _ *http.Request) {
 
 	bytesChannel := make(chan []byte, 1)
 
-	ch <- func() {
+	// TODO:
+	/* ch <- func() {
 		stat.Consistent = theReader.StatusConsistent() && theWriter.StatusConsistent()
 		jsonBytes, err := json.Marshal(stat)
 		if err != nil {
@@ -24,7 +24,7 @@ func Handler(w http.ResponseWriter, _ *http.Request) {
 			return
 		}
 		bytesChannel <- jsonBytes
-	}
+	} */
 
 	select {
 	case bytes := <-bytesChannel:

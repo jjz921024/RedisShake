@@ -1,10 +1,13 @@
 package status
 
 import (
+	"context"
 	"time"
 
 	"RedisShake/internal/config"
 	"RedisShake/internal/log"
+
+	"github.com/spf13/viper"
 )
 
 type Statusable interface {
@@ -26,12 +29,26 @@ type Stat struct {
 }
 
 var ch = make(chan func(), 1000)
-var stat = new(Stat)
-var theReader Statusable
-var theWriter Statusable
+
+type SyncTask struct {
+	Ctx    context.Context
+	Cancel context.CancelFunc
+	V      *viper.Viper
+
+	Writer Statusable
+	Reader Statusable
+
+	Stat *Stat
+}
+
+var CurrentTask *SyncTask
 
 func AddReadCount(cmd string) {
 	ch <- func() {
+		if CurrentTask == nil {
+			return
+		}
+		stat := CurrentTask.Stat
 		if stat.PerCmdEntriesCount == nil {
 			stat.PerCmdEntriesCount = make(map[string]EntryCount)
 		}
@@ -48,6 +65,10 @@ func AddReadCount(cmd string) {
 
 func AddWriteCount(cmd string) {
 	ch <- func() {
+		if CurrentTask == nil {
+			return
+		}
+		stat := CurrentTask.Stat
 		if stat.PerCmdEntriesCount == nil {
 			stat.PerCmdEntriesCount = make(map[string]EntryCount)
 		}
@@ -62,24 +83,22 @@ func AddWriteCount(cmd string) {
 	}
 }
 
-func Init(r Statusable, w Statusable) {
-	theReader = r
-	theWriter = w
-	setStatusPort()
-	stat.Time = time.Now().Format("2006-01-02 15:04:05")
-
+func Init() {
 	// for update reader/writer stat
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
-		lastConsistent := false
 		for range ticker.C {
+			if CurrentTask == nil {
+				continue
+			}
 			ch <- func() {
+				stat := CurrentTask.Stat
 				// update reader/writer stat
-				stat.Reader = theReader.Status()
-				stat.Writer = theWriter.Status()
-				stat.Consistent = lastConsistent && theReader.StatusConsistent() && theWriter.StatusConsistent()
-				lastConsistent = stat.Consistent
+				stat.Reader = CurrentTask.Reader.Status()
+				stat.Writer = CurrentTask.Writer.Status()
+				stat.Consistent = CurrentTask.Reader.StatusConsistent() && CurrentTask.Writer.StatusConsistent()
+
 				// update OPS
 				stat.TotalEntriesCount.updateOPS()
 				for _, cmdEntryCount := range stat.PerCmdEntriesCount {
@@ -98,8 +117,11 @@ func Init(r Statusable, w Statusable) {
 		ticker := time.NewTicker(time.Duration(config.Opt.Advanced.LogInterval) * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
+			if CurrentTask == nil {
+				continue
+			}
 			ch <- func() {
-				log.Infof("%s, %s", stat.TotalEntriesCount.String(), theReader.StatusString())
+				log.Infof("%s, %s", CurrentTask.Stat.TotalEntriesCount.String(), CurrentTask.Reader.StatusString())
 			}
 		}
 	}()

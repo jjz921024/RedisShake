@@ -11,6 +11,7 @@ import (
 	"RedisShake/internal/config"
 	"RedisShake/internal/log"
 	"RedisShake/internal/server"
+	"RedisShake/internal/status"
 	"RedisShake/internal/utils"
 
 	"github.com/mcuadros/go-defaults"
@@ -24,6 +25,7 @@ func main() {
 	log.Init(config.Opt.Advanced.LogLevel, config.Opt.Advanced.LogFile, config.Opt.Advanced.Dir)
 	utils.ChdirAndAcquireFileLock()
 	utils.SetNcpu()
+	status.Init()
 
 	ctx, cancel := context.WithCancel(context.Background())
 

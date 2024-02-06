@@ -116,7 +116,8 @@ func (ld *Loader) ParseRDB(ctx context.Context) int {
 func (ld *Loader) parseRDBEntry(ctx context.Context, rd *bufio.Reader) {
 	// for stat
 	updateProcessSize := func() {
-		if ld.updateFunc == nil {
+		// TODO: 无盘复制时 获取rdb同步进度
+		if ld.updateFunc == nil || ld.fp == nil {
 			return
 		}
 		offset, err := ld.fp.Seek(0, io.SeekCurrent)

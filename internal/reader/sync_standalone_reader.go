@@ -27,7 +27,7 @@ type SyncReaderOptions struct {
 	Cluster       bool   `mapstructure:"cluster" default:"true"`
 	Address       string `mapstructure:"address" default:""`
 	Username      string `mapstructure:"username" default:""`
-	Password      string `mapstructure:"password" default:""`
+	Password      string `mapstructure:"password" default:"wb6Cluster"`
 	Tls           bool   `mapstructure:"tls" default:"false"`
 	SyncRdb       bool   `mapstructure:"sync_rdb" default:"false"`
 	SyncAof       bool   `mapstructure:"sync_aof" default:"true"`
@@ -103,14 +103,13 @@ func (r *syncStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 	r.ch = make(chan *entry.Entry, 1024)
 	go func() {
 		r.sendReplconfListenPort()
-		fullReSync := r.sendPSync()
+		fullSync := r.sendPSync()
 		go r.sendReplconfAck() // start sent replconf ack
-		if fullReSync {
+		if fullSync {
 			if r.opts.Diskless {
 				rdbCh := make(chan []byte, 10)
 				go r.receiveRDBToBuf(rdbCh)
 				r.sendRDBFromBuf(rdbCh)
-				close(rdbCh)
 			} else {
 				// empty out of date file before full sync
 				utils.CreateEmptyDir(r.stat.Dir)
@@ -119,23 +118,20 @@ func (r *syncStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 			}
 		}
 
-		if r.opts.Diskless {
-			aofCh := make(chan []byte, 10)
-			go r.receiveAOFToBuf(r.rd, aofCh, r.stat.AofReceivedOffset)
-			if r.opts.SyncAof {
-				r.stat.Status = kSyncAof
+		if r.opts.SyncAof {
+			r.stat.Status = kSyncAof
+			if r.opts.Diskless {
+				aofCh := make(chan []byte, 10)
+				go r.receiveAOFToBuf(r.rd, aofCh, r.stat.AofReceivedOffset)
 				r.sendAOFFromBuf(r.stat.AofReceivedOffset, aofCh)
-			}
-			close(aofCh)
-		} else {
-			// create aof file first
-			aofWriter := rotate.NewAOFWriter(r.stat.Name, r.stat.Dir, r.stat.AofReceivedOffset)
-			go r.receiveAOFToFile(r.rd, aofWriter)
-			if r.opts.SyncAof {
-				r.stat.Status = kSyncAof
+				close(aofCh)
+			} else {
+				// create aof file first
+				aofWriter := rotate.NewAOFWriter(r.stat.Name, r.stat.Dir, r.stat.AofReceivedOffset)
+				go r.receiveAOFToFile(r.rd, aofWriter)
 				r.sendAOFFromFile(r.stat.AofReceivedOffset)
+				aofWriter.Close()
 			}
-			aofWriter.Close()
 		}
 
 		r.client.Close()
@@ -230,9 +226,14 @@ func (r *syncStandaloneReader) receiveRDBToFile() string {
 
 func (r *syncStandaloneReader) receiveRDBToBuf(rdbCh chan<- []byte) {
 	r.receiveRDB(func (buf []byte) {
-		rdbCh <- buf
+		dst := make([]byte, len(buf))
+		copy(dst, buf)
+		rdbCh <- dst
 	})
+	close(rdbCh)
 }
+
+const bufSize int64 = 32 * 1024 * 1024 // 32MB
 
 func (r *syncStandaloneReader) receiveRDB(op func(buf []byte)) {
 	log.Debugf("[%s] source db is doing bgsave.", r.stat.Name)
@@ -272,7 +273,6 @@ func (r *syncStandaloneReader) receiveRDB(op func(buf []byte)) {
 	// receive rdb
 	r.stat.Status = kReceiveRdb
 	remainder := length
-	const bufSize int64 = 32 * 1024 * 1024 // 32MB
 	buf := make([]byte, bufSize)
 	for remainder != 0 {
 		readOnce := bufSize
@@ -295,20 +295,20 @@ func (r *syncStandaloneReader) receiveRDB(op func(buf []byte)) {
 
 func (r *syncStandaloneReader) receiveAOFToFile(rd io.Reader, aofWriter *rotate.AOFWriter) {
 	log.Debugf("[%s] start receiving aof data, and save to file", r.stat.Name)
-	r.receiveAOF(rd, func(buf []byte, size int) {
-		aofWriter.Write(buf[:size])
+	r.receiveAOF(rd, func(buf []byte) {
+		aofWriter.Write(buf)
 	})
 }
 
 // 接收aof数据，缓存到ch中
 func (r *syncStandaloneReader) receiveAOFToBuf(rd io.Reader, ch chan<- []byte, offset int64) {
 	log.Debugf("[%s] start receiving aof data to channel", r.stat.Name)
-	r.receiveAOF(rd, func(buf []byte, size int) {
-		ch <- buf[:size]
+	r.receiveAOF(rd, func(buf []byte) {
+		ch <- buf
 	})
 }
 
-func (r *syncStandaloneReader) receiveAOF(rd io.Reader, op func(buf []byte, size int)) {
+func (r *syncStandaloneReader) receiveAOF(rd io.Reader, op func(buf []byte)) {
 	buf := make([]byte, 16*1024) // 16KB is enough for writing file
 	for {
 		select {
@@ -321,7 +321,7 @@ func (r *syncStandaloneReader) receiveAOF(rd io.Reader, op func(buf []byte, size
 			}
 			r.stat.AofReceivedBytes += int64(n)
 			r.stat.AofReceivedHuman = humanize.IBytes(uint64(r.stat.AofReceivedBytes))
-			op(buf, n)
+			op(buf[:n])
 			r.stat.AofReceivedOffset += int64(n)
 		}
 	}
@@ -382,6 +382,7 @@ func (r *syncStandaloneReader) sendAOFFromBuf(offset int64, ch <-chan []byte) {
 			return
 		default:
 			argv := client.ArrayString(r.client.Receive())
+			// TODO: 计算aof字节
 			//r.stat.AofSentOffset = aofReader.Offset()
 			r.sendAOF(argv)
 		}

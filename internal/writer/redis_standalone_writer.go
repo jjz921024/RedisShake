@@ -19,7 +19,7 @@ type RedisWriterOptions struct {
 	Cluster  bool   `mapstructure:"cluster" default:"true"`
 	Address  string `mapstructure:"address" default:""`
 	Username string `mapstructure:"username" default:""`
-	Password string `mapstructure:"password" default:""`
+	Password string `mapstructure:"password" default:"wb6Cluster"`
 	Tls      bool   `mapstructure:"tls" default:"false"`
 	OffReply bool   `mapstructure:"off_reply" default:"false"`
 }
