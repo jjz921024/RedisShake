@@ -78,6 +78,10 @@ func (r *scanStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 	return r.ch
 }
 
+func(r *scanStandaloneReader) Close() {
+	
+}
+
 func (r *scanStandaloneReader) subscript() {
 	if !r.opts.KSN {
 		return

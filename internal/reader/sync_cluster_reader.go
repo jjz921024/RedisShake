@@ -49,6 +49,12 @@ func (rd *syncClusterReader) StartRead(ctx context.Context) chan *entry.Entry {
 	return ch
 }
 
+func(rd *syncClusterReader) Close() {
+	for _, r := range rd.readers {
+		r.Close()
+	}
+}
+
 func (rd *syncClusterReader) Status() interface{} {
 	stat := make([]interface{}, 0)
 	for _, r := range rd.readers {

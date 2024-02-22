@@ -61,6 +61,12 @@ func (r *rdbReader) StartRead(ctx context.Context) chan *entry.Entry {
 	return r.ch
 }
 
+func (r *rdbReader) Close() {
+	if r.ch != nil {
+		close(r.ch)
+	}
+}
+
 func (r *rdbReader) Status() interface{} {
 	return r.stat
 }

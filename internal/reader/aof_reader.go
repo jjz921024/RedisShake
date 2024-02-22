@@ -103,3 +103,9 @@ func (r *aofReader) StartRead(ctx context.Context) chan *entry.Entry {
 
 	return r.ch
 }
+
+func (r *aofReader) Close() {
+	if r.ch != nil {
+		close(r.ch)
+	}
+}

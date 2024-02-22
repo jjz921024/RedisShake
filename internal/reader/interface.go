@@ -14,6 +14,7 @@ import (
 type Reader interface {
 	status.Statusable
 	StartRead(ctx context.Context) chan *entry.Entry
+	Close()
 }
 
 func CreateReader(v *viper.Viper) (Reader, error) {

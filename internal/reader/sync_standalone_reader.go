@@ -145,6 +145,13 @@ func (r *syncStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 	return r.ch
 }
 
+func(r *syncStandaloneReader) Close() {
+	r.client.Close()
+	if r.ch != nil {
+		close(r.ch)
+	}
+}
+
 func (r *syncStandaloneReader) sendReplconfListenPort() {
 	// use status_port as redis-shake port
 	argv := []string{"replconf", "listening-port", strconv.Itoa(config.Opt.Advanced.StatusPort)}
