@@ -33,7 +33,9 @@ var ch = make(chan func(), 1000)
 type SyncTask struct {
 	Ctx    context.Context
 	Cancel context.CancelFunc
-	V      *viper.Viper
+
+	ID string
+	V  *viper.Viper
 
 	Writer Statusable
 	Reader Statusable

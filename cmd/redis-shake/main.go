@@ -39,7 +39,7 @@ func main() {
 		httpSvr = server.StartHttpServer(opts)
 
 	} else {
-		_, err := server.CreateAndStartTask(ctx, v)
+		_, err := server.CreateAndStartTask(ctx, v, cancel)
 		if err != nil {
 			log.Panicf("start err:%s\n", err.Error())
 		}

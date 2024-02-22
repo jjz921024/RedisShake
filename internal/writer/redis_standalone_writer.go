@@ -22,6 +22,9 @@ type RedisWriterOptions struct {
 	Password string `mapstructure:"password" default:"wb6Cluster"`
 	Tls      bool   `mapstructure:"tls" default:"false"`
 	OffReply bool   `mapstructure:"off_reply" default:"false"`
+
+	ClusterName   string `mapstructure:"cluster_name" default:""`
+	PartitionName string `mapstructure:"partition_name" default:""`
 }
 
 type redisStandaloneWriter struct {

@@ -34,6 +34,9 @@ type SyncReaderOptions struct {
 	PreferReplica bool   `mapstructure:"prefer_replica" default:"true"`
 	Diskless      bool   `mapstructure:"disk_less" default:"true"`
 	ResumeOffset  int64  `mapstructure:"resume_offset" default:"0"`
+
+	ClusterName   string `mapstructure:"cluster_name" default:""`
+	PartitionName string `mapstructure:"partition_name" default:""`
 }
 
 type State string
@@ -210,7 +213,7 @@ func (r *syncStandaloneReader) receiveRDBToFile() string {
 		log.Panicf(err.Error())
 	}
 
-	r.receiveRDB(func (buf []byte) {
+	r.receiveRDB(func(buf []byte) {
 		_, err = rdbFileHandle.Write(buf)
 		if err != nil {
 			log.Panicf(err.Error())
@@ -225,7 +228,7 @@ func (r *syncStandaloneReader) receiveRDBToFile() string {
 }
 
 func (r *syncStandaloneReader) receiveRDBToBuf(rdbCh chan<- []byte) {
-	r.receiveRDB(func (buf []byte) {
+	r.receiveRDB(func(buf []byte) {
 		dst := make([]byte, len(buf))
 		copy(dst, buf)
 		rdbCh <- dst
