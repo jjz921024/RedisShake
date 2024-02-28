@@ -1,6 +1,7 @@
 package server
 
 import (
+	"RedisShake/internal/config"
 	"RedisShake/internal/log"
 	"RedisShake/internal/reader"
 	"RedisShake/internal/status"
@@ -16,16 +17,11 @@ import (
 	"github.com/spf13/viper"
 )
 
-type HttpServerOptions struct {
-	HttpPort int `mapstructure:"http_port" default:"8080"`
-}
-
-func StartHttpServer(opts *HttpServerOptions) *http.Server {
+func StartHttpServer(opts *config.HttpServerOptions) *http.Server {
 	mux := mux.NewRouter()
 	mux.HandleFunc("/msa/task/start", submitTask)
 	mux.HandleFunc("/msa/task/cancel/{id}", cancelTask)
 	mux.HandleFunc("/msa/task/info/{id}", displayTask)
-	mux.HandleFunc("/msa/task/health/{id}", healthCheck)
 
 	httpSvr := &http.Server{
 		Addr:         ":" + strconv.Itoa(opts.HttpPort),
@@ -46,12 +42,19 @@ func StartHttpServer(opts *HttpServerOptions) *http.Server {
 
 type httpResponse struct {
 	Code    int         `json:"code"`
-	Message interface{} `json:"message,omitempty"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
 }
 
 var (
-	successResp httpResponse = httpResponse{0, "success"}
-	noTaskResp httpResponse = httpResponse{-1, "not task"}
+	successResp httpResponse = httpResponse{
+		Code:    0,
+		Message: "success",
+	}
+	noTaskResp  httpResponse = httpResponse{
+		Code:    0,
+		Message: "no running task",
+	}
 )
 
 func submitTask(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +65,10 @@ func submitTask(w http.ResponseWriter, r *http.Request) {
 
 	// 只能运行一个任务
 	if status.CurrentTask != nil {
-		resp, _ := json.Marshal(httpResponse{-1, []byte("exist running task:" + status.CurrentTask.ID)})
+		resp, _ := json.Marshal(httpResponse{
+			Code:    -1,
+			Message: "exist running task:" + status.CurrentTask.ID,
+		})
 		_, _ = w.Write(resp)
 		return
 	}
@@ -71,7 +77,10 @@ func submitTask(w http.ResponseWriter, r *http.Request) {
 	v.SetConfigType("json")
 	if err := v.ReadConfig(r.Body); err != nil {
 		log.Warnf("read task info err:%s", err.Error())
-		resp, _ := json.Marshal(httpResponse{-1, err.Error()})
+		resp, _ := json.Marshal(httpResponse{
+			Code:    0,
+			Message: err.Error(),
+		})
 		_, _ = w.Write(resp)
 		return
 	}
@@ -83,7 +92,10 @@ func submitTask(w http.ResponseWriter, r *http.Request) {
 	status.CurrentTask, err = CreateAndStartTask(ctx, v, cancel)
 	if err != nil {
 		log.Warnf("read task info err:%s", err.Error())
-		resp, _ := json.Marshal(httpResponse{-1, err.Error()})
+		resp, _ := json.Marshal(httpResponse{
+			Code:    0,
+			Message: err.Error(),
+		})
 		_, _ = w.Write(resp)
 		cancel()
 		return
@@ -96,7 +108,7 @@ func submitTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateAndStartTask(ctx context.Context, v *viper.Viper, cancel context.CancelFunc) (*status.SyncTask, error) {
-	taskId := v.GetString("advanced.task_id")
+	taskId := v.GetString("http_server.task_id")
 	if taskId == "" {
 		return nil, errors.New("task id is null")
 	}
@@ -108,7 +120,7 @@ func CreateAndStartTask(ctx context.Context, v *viper.Viper, cancel context.Canc
 
 	theWriter, err := writer.CreateWriter(v)
 	if err != nil {
-		// TODO: reader释放不了
+		theReader.Close()
 		return nil, err
 	}
 
@@ -187,34 +199,11 @@ func displayTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	settings := status.CurrentTask.V.AllSettings()
-	//s := status.CurrentTask.Stat
-	response := httpResponse{
+	resp, _ := json.Marshal(httpResponse{
 		Code:    0,
-		Message: settings,
-	}
-
-	resp, _ := json.Marshal(response)
-	if _, err := w.Write(resp); err != nil {
-		log.Warnf("respone http err:%s", err.Error())
-	}
-}
-
-// 任务健康检查
-func healthCheck(w http.ResponseWriter, r *http.Request) {
-	header := w.Header()
-	header.Add("content-type", "application/json")
-
-	vars := mux.Vars(r)
-	taskId := vars["id"]
-	log.Infof("check task:%s from:%s", taskId, r.RemoteAddr)
-
-	if status.CurrentTask == nil || status.CurrentTask.ID != taskId {
-		resp, _ := json.Marshal(noTaskResp)
-		_, _ = w.Write(resp)
-		return
-	}
-
-	resp, _ := json.Marshal(successResp)
+		Message: "success",
+		Data: settings,
+	})
 	if _, err := w.Write(resp); err != nil {
 		log.Warnf("respone http err:%s", err.Error())
 	}

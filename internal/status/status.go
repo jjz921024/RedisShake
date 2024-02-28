@@ -1,7 +1,11 @@
 package status
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"time"
 
 	"RedisShake/internal/config"
@@ -14,6 +18,7 @@ type Statusable interface {
 	Status() interface{}
 	StatusString() string
 	StatusConsistent() bool
+	IdOffset() (string, int64)
 }
 
 type Stat struct {
@@ -43,6 +48,7 @@ type SyncTask struct {
 	Stat *Stat
 }
 
+// TODO: lock
 var CurrentTask *SyncTask
 
 func AddReadCount(cmd string) {
@@ -83,6 +89,32 @@ func AddWriteCount(cmd string) {
 		cmdEntryCount.WriteCount += 1
 		stat.PerCmdEntriesCount[cmd] = cmdEntryCount
 	}
+}
+
+var (
+	client = &http.Client{
+		Transport: &http.Transport{
+			MaxIdleConns: 3,
+		},
+		Timeout: 5 * time.Second,
+	}
+)
+
+const (
+	hearthCheckPath  = "/worker/status"
+	offsetReportPaht = "/msa/task"
+)
+
+type httpResponse struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+type syncInfoBody struct {
+	TaskId     string `json:"task_id"`
+	ReplId     string `json:"repl_id"`
+	ReplOffset int64  `json:"repl_offset"`
 }
 
 func Init() {
@@ -128,10 +160,99 @@ func Init() {
 		}
 	}()
 
+	httpOpt := config.Opt.HttpServer
+	if httpOpt.Enable && (httpOpt.Host == "" || httpOpt.AdminUrl == "") {
+		log.Panicf("lack of field, host:%s:%d, admin url:%s", httpOpt.Host, httpOpt.HttpPort, httpOpt.AdminUrl)
+	}
+
+	// heartbeat to admin
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			ch <- func() {
+				req, err := http.NewRequest("POST", httpOpt.AdminUrl+hearthCheckPath, nil)
+				req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+				if err != nil {
+					log.Warnf("build http req err:%s", err.Error())
+					return
+				}
+
+				resp, err := client.Do(req)
+				if err != nil {
+					log.Warnf("heartbeat to admin err:%s", err.Error())
+					return
+				}
+				defer resp.Body.Close()
+				dealHttpResponse(resp)
+			}
+		}
+	}()
+
+	// report offset
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if CurrentTask == nil {
+				return
+			}
+
+			ch <- func() {
+				replId, offset := CurrentTask.Reader.IdOffset()
+				// 目前只是以节点维度上报
+				body, err := json.Marshal(syncInfoBody{
+					TaskId:     CurrentTask.ID,
+					ReplId:     replId,
+					ReplOffset: offset,
+				})
+				if err != nil {
+					log.Warnf("json encode err:%s", err.Error())
+					return
+				}
+
+				log.Infof("reporte offset to admin taskId:%s, replId:%s, offset:%d", CurrentTask.ID, replId, offset)
+				req, err := http.NewRequest("POST", httpOpt.AdminUrl+offsetReportPaht, bytes.NewBuffer(body))
+				req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+				if err != nil {
+					log.Warnf("build http req err:%s", err.Error())
+					return
+				}
+
+				resp, err := client.Do(req)
+				if err != nil {
+					log.Warnf("report offset to admin err:%s", err.Error())
+					return
+				}
+				defer resp.Body.Close()
+				dealHttpResponse(resp)
+			}
+		}
+	}()
+
 	// run all func in ch
 	go func() {
 		for f := range ch {
 			f()
 		}
 	}()
+}
+
+func dealHttpResponse(resp *http.Response) {
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Warnf("read response body fail, err:%s", err.Error())
+		return
+	} else if resp.StatusCode != 200 {
+		log.Warnf("http request not expected, code:%d, content:%s", resp.StatusCode, string(content))
+		return
+	}
+
+	respBody := &httpResponse{}
+	err = json.Unmarshal(content, resp)
+	if err != nil {
+		log.Warnf("parse http response err:%s, resp:%s", err.Error(), string(content))
+	} else if respBody.Code != 0 {
+		log.Warnf("http response not expected code:%d, content%s", respBody.Code, string(content))
+	}
 }

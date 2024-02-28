@@ -101,3 +101,7 @@ func (r *RedisClusterWriter) StatusConsistent() bool {
 	}
 	return true
 }
+
+func (r *RedisClusterWriter) IdOffset() (string, int64) {
+	panic("unimplemented")
+}

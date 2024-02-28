@@ -41,8 +41,6 @@ type AdvancedOptions struct {
 	AwsPSync string `mapstructure:"aws_psync" default:""` // 10.0.0.1:6379@nmfu2sl5osync,10.0.0.1:6379@xhma21xfkssync
 
 	EmptyDBBeforeSync bool `mapstructure:"empty_db_before_sync" default:"false"`
-
-	TaskID string `mapstructure:"task_id" default:""`
 }
 
 type ModuleOptions struct {
@@ -60,10 +58,19 @@ func (opt *AdvancedOptions) GetPSyncCommand(address string) string {
 	return ""
 }
 
+type HttpServerOptions struct {
+	Enable   bool   `mapstructure:"enable"`
+	Host     string `mapstructure:"host" default:""`
+	HttpPort int    `mapstructure:"http_port" default:"8080"`
+	AdminUrl string `mapstructure:"admin_url" default:""`
+	TaskID   string `mapstructure:"task_id" default:""`
+}
+
 type ShakeOptions struct {
-	Function string `mapstructure:"function" default:""`
-	Advanced AdvancedOptions
-	Module   ModuleOptions
+	Function   string `mapstructure:"function" default:""`
+	Advanced   AdvancedOptions
+	Module     ModuleOptions
+	HttpServer HttpServerOptions `mapstructure:"http_server" default:""`
 }
 
 var Opt ShakeOptions

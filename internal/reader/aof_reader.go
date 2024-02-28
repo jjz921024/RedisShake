@@ -46,6 +46,10 @@ func (r *aofReader) StatusConsistent() bool {
 	return r.stat.AOFFileSentBytes == r.stat.AOFFileSizeBytes
 }
 
+func (r *aofReader) IdOffset() (string, int64) {
+	panic("unimplemented")
+}
+
 func NewAOFReader(opts *AOFReaderOptions) Reader {
 	log.Infof("NewAOFReader: path=[%s]", opts.Filepath)
 	absolutePath, err := filepath.Abs(opts.Filepath)

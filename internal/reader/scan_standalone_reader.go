@@ -79,7 +79,7 @@ func (r *scanStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 }
 
 func(r *scanStandaloneReader) Close() {
-	
+
 }
 
 func (r *scanStandaloneReader) subscript() {
@@ -234,4 +234,8 @@ func (r *scanStandaloneReader) StatusString() string {
 
 func (r *scanStandaloneReader) StatusConsistent() bool {
 	return r.stat.ScanFinished && r.stat.NeedUpdateCount == 0
+}
+
+func (r *scanStandaloneReader) IdOffset() (string, int64) {
+	panic("unimplemented")
 }

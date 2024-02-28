@@ -45,7 +45,7 @@ func (rd *scanClusterReader) StartRead(ctx context.Context) chan *entry.Entry {
 	return ch
 }
 
-func(rd *scanClusterReader) Close() {
+func (rd *scanClusterReader) Close() {
 	for _, r := range rd.readers {
 		r.Close()
 	}
@@ -63,6 +63,10 @@ func (rd *scanClusterReader) StatusString() string {
 	rd.statusId += 1
 	rd.statusId %= len(rd.readers)
 	return fmt.Sprintf("src-%d, %s", rd.statusId, rd.readers[rd.statusId].StatusString())
+}
+
+func (rd *scanClusterReader) IdOffset() (string, int64) {
+	panic("unimplemented")
 }
 
 func (rd *scanClusterReader) StatusConsistent() bool {

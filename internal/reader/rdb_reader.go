@@ -78,3 +78,7 @@ func (r *rdbReader) StatusString() string {
 func (r *rdbReader) StatusConsistent() bool {
 	return r.stat.FileSentBytes == r.stat.FileSizeBytes
 }
+
+func (r *rdbReader) IdOffset() (string, int64) {
+	panic("unimplemented")
+}

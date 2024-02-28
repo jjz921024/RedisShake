@@ -77,3 +77,7 @@ func (rd *syncClusterReader) StatusConsistent() bool {
 	}
 	return true
 }
+
+func (rd *syncClusterReader) IdOffset() (string, int64) {
+	panic("unimplemented")
+}

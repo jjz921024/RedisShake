@@ -29,8 +29,8 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	if v.IsSet("http_server") {
-		opts := new(server.HttpServerOptions)
+	if config.Opt.HttpServer.Enable {
+		opts := new(config.HttpServerOptions)
 		defaults.SetDefaults(opts)
 		err := v.UnmarshalKey("http_server", opts)
 		if err != nil {

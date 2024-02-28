@@ -64,6 +64,8 @@ type syncStandaloneReader struct {
 		Address string `json:"address"`
 		Dir     string `json:"dir"`
 
+		ReplId  string `json:"repl_id"`
+
 		// status
 		Status State `json:"status"`
 
@@ -89,6 +91,7 @@ func NewSyncStandaloneReader(opts *SyncReaderOptions) Reader {
 	r.client = client.NewRedisClient(opts.Address, opts.Username, opts.Password, opts.Tls)
 	r.rd = r.client.BufioReader()
 	r.stat.Name = "reader_" + strings.Replace(opts.Address, ":", "_", -1) + "_" + r.client.ReplId
+	r.stat.ReplId = r.client.ReplId
 	r.stat.Address = opts.Address
 	r.stat.Status = kHandShake
 	r.stat.Dir = utils.GetAbsPath(r.stat.Name)
@@ -466,6 +469,10 @@ func (r *syncStandaloneReader) StatusConsistent() bool {
 	return r.stat.AofReceivedOffset != 0 &&
 		r.stat.AofReceivedOffset == r.stat.AofSentOffset &&
 		len(r.ch) == 0
+}
+
+func (rd *syncStandaloneReader) IdOffset() (string, int64) {
+	return rd.stat.ReplId, rd.stat.AofSentOffset
 }
 
 func readLastReplOffset(dir string) int64 {
