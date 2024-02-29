@@ -15,18 +15,26 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/spf13/viper"
+	"github.com/urfave/negroni"
 )
 
 func StartHttpServer(opts *config.HttpServerOptions) *http.Server {
 	mux := mux.NewRouter()
-	mux.HandleFunc("/msa/task/start", submitTask)
-	mux.HandleFunc("/msa/task/cancel/{id}", cancelTask)
-	mux.HandleFunc("/msa/task/info/{id}", displayTask)
+	mux.HandleFunc("/msa/task", submitTask).Methods("POST")
+	mux.HandleFunc("/msa/task/{id}", cancelTask).Methods("DELETE")
+	mux.HandleFunc("/msa/task/{id}", displayTask).Methods("GET")
+
+	n := negroni.New()
+	recovery := negroni.NewRecovery()
+	recovery.Formatter = &JsonFormatter{}
+	n.Use(recovery)
+	n.Use(negroni.NewLogger())
+	n.UseHandler(mux)
 
 	httpSvr := &http.Server{
 		Addr:         ":" + strconv.Itoa(opts.HttpPort),
 		WriteTimeout: time.Second * 5,
-		Handler:      mux,
+		Handler:      n,
 	}
 
 	go func() {
@@ -38,6 +46,19 @@ func StartHttpServer(opts *config.HttpServerOptions) *http.Server {
 
 	log.Infof("http server listen on:%d", opts.HttpPort)
 	return httpSvr
+}
+
+type JsonFormatter struct{}
+
+func (t *JsonFormatter) FormatPanicError(rw http.ResponseWriter, r *http.Request, infos *negroni.PanicInformation) {
+	if rw.Header().Get("Content-Type") != "application/json" {
+		rw.Header().Set("Content-Type", "application/json")
+	}
+	resp, _ := json.Marshal(httpResponse{
+		Code:    -1,
+		Message: infos.StackAsString(),
+	})
+	_, _ = rw.Write(resp)
 }
 
 type httpResponse struct {
@@ -60,8 +81,6 @@ var (
 func submitTask(w http.ResponseWriter, r *http.Request) {
 	header := w.Header()
 	header.Add("content-type", "application/json")
-
-	log.Infof("submit a task from:%s", r.RemoteAddr)
 
 	// 只能运行一个任务
 	if status.CurrentTask != nil {
@@ -159,7 +178,6 @@ func cancelTask(w http.ResponseWriter, r *http.Request) {
 
 	vars := mux.Vars(r)
 	taskId := vars["id"]
-	log.Infof("request cancel task:%s from:%s", taskId, r.RemoteAddr)
 
 	if status.CurrentTask == nil || status.CurrentTask.ID != taskId {
 		log.Infof("current not exist running task")
@@ -190,7 +208,6 @@ func displayTask(w http.ResponseWriter, r *http.Request) {
 
 	vars := mux.Vars(r)
 	taskId := vars["id"]
-	log.Infof("display task:%s from:%s", taskId, r.RemoteAddr)
 
 	if status.CurrentTask == nil || status.CurrentTask.ID != taskId {
 		resp, _ := json.Marshal(noTaskResp)

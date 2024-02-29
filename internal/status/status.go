@@ -102,19 +102,25 @@ var (
 
 const (
 	hearthCheckPath  = "/worker/status"
-	offsetReportPaht = "/msa/task"
+	offsetReportPaht = "/msa/task/offset"
 )
 
-type httpResponse struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
+type hearthInfoBody struct {
+	IP   string `json:"ip"`
+	Port int    `json:"port"`
+	Role string `json:"role"`
 }
 
 type syncInfoBody struct {
 	TaskId     string `json:"task_id"`
 	ReplId     string `json:"repl_id"`
 	ReplOffset int64  `json:"repl_offset"`
+}
+
+type httpResponse struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
 }
 
 func Init() {
@@ -171,7 +177,16 @@ func Init() {
 		defer ticker.Stop()
 		for range ticker.C {
 			ch <- func() {
-				req, err := http.NewRequest("POST", httpOpt.AdminUrl+hearthCheckPath, nil)
+				body, err := json.Marshal(hearthInfoBody{
+					IP:   httpOpt.Host,
+					Port: httpOpt.HttpPort,
+					Role: "reader",
+				})
+				if err != nil {
+					log.Warnf("json encode err:%s", err.Error())
+					return
+				}
+				req, err := http.NewRequest("POST", httpOpt.AdminUrl+hearthCheckPath, bytes.NewBuffer(body))
 				req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 				if err != nil {
 					log.Warnf("build http req err:%s", err.Error())
@@ -184,7 +199,7 @@ func Init() {
 					return
 				}
 				defer resp.Body.Close()
-				dealHttpResponse(resp)
+				dealHttpResponse(req.URL.String(), resp)
 			}
 		}
 	}()
@@ -225,7 +240,7 @@ func Init() {
 					return
 				}
 				defer resp.Body.Close()
-				dealHttpResponse(resp)
+				dealHttpResponse(req.URL.String(), resp)
 			}
 		}
 	}()
@@ -238,21 +253,21 @@ func Init() {
 	}()
 }
 
-func dealHttpResponse(resp *http.Response) {
+func dealHttpResponse(url string, resp *http.Response) {
 	content, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Warnf("read response body fail, err:%s", err.Error())
+		log.Warnf("read response body fail, url:%s err:%s", url, err.Error())
 		return
 	} else if resp.StatusCode != 200 {
-		log.Warnf("http request not expected, code:%d, content:%s", resp.StatusCode, string(content))
+		log.Warnf("http response status code not expected, url:%s code:%d, content:%s", url, resp.StatusCode, string(content))
 		return
 	}
 
 	respBody := &httpResponse{}
 	err = json.Unmarshal(content, resp)
 	if err != nil {
-		log.Warnf("parse http response err:%s, resp:%s", err.Error(), string(content))
+		log.Warnf("parse http response, url:%s, err:%s, resp:%s", url, err.Error(), string(content))
 	} else if respBody.Code != 0 {
-		log.Warnf("http response not expected code:%d, content%s", respBody.Code, string(content))
+		log.Warnf("http response not expected, url:%s, code:%d, content%s", url, respBody.Code, string(content))
 	}
 }

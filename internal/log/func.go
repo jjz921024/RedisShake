@@ -2,10 +2,6 @@ package log
 
 import (
 	"fmt"
-	"os"
-	"strings"
-
-	"github.com/go-stack/stack"
 )
 
 func Debugf(format string, args ...interface{}) {
@@ -21,8 +17,9 @@ func Warnf(format string, args ...interface{}) {
 }
 
 func Panicf(format string, args ...interface{}) {
-	frames := stack.Trace()
 	errMsg := fmt.Sprintf(format, args...)
+	panic(errMsg)
+	/* frames := stack.Trace()
 	for _, frame := range frames {
 		frameStr := fmt.Sprintf("%+v", frame)
 		if strings.HasPrefix(frameStr, "redis-shake/main.go") {
@@ -34,5 +31,5 @@ func Panicf(format string, args ...interface{}) {
 		errMsg += fmt.Sprintf("\n\t\t\t%v -> %n()", frameStr, frame)
 	}
 	logger.Error().Msgf(errMsg)
-	os.Exit(1)
+	os.Exit(1) */
 }
