@@ -113,3 +113,9 @@ func LoadConfig() *viper.Viper {
 	}
 	return v
 }
+
+type ExtOptions struct {
+	ClusterName   string `mapstructure:"cluster_name" default:""`
+	PartitionName string `mapstructure:"partition_name" default:""`
+	NodeNum       int    `mapstructure:"node_num" default:"-1"` // 集群模式下为-1
+}

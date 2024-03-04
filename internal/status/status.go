@@ -101,8 +101,9 @@ var (
 )
 
 const (
-	hearthCheckPath  = "/worker/status"
-	offsetReportPaht = "/msa/task/offset"
+	hearthCheckPath  = "/msa/worker/status"
+	offsetReportPath = "/msa/task/offset"
+	taskResultPath   = "msa/task/status"
 )
 
 type hearthInfoBody struct {
@@ -115,6 +116,12 @@ type syncInfoBody struct {
 	TaskId     string `json:"task_id"`
 	ReplId     string `json:"repl_id"`
 	ReplOffset int64  `json:"repl_offset"`
+}
+
+type taskResultBody struct {
+	TaskId  string `json:"task_id"`
+	Result  string `json:"run_status"`
+	Message string `json:"message"`
 }
 
 type httpResponse struct {
@@ -210,7 +217,7 @@ func Init() {
 		defer ticker.Stop()
 		for range ticker.C {
 			if CurrentTask == nil {
-				return
+				continue
 			}
 
 			ch <- func() {
@@ -227,7 +234,7 @@ func Init() {
 				}
 
 				log.Infof("reporte offset to admin taskId:%s, replId:%s, offset:%d", CurrentTask.ID, replId, offset)
-				req, err := http.NewRequest("POST", httpOpt.AdminUrl+offsetReportPaht, bytes.NewBuffer(body))
+				req, err := http.NewRequest("POST", httpOpt.AdminUrl+offsetReportPath, bytes.NewBuffer(body))
 				req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 				if err != nil {
 					log.Warnf("build http req err:%s", err.Error())
@@ -270,4 +277,32 @@ func dealHttpResponse(url string, resp *http.Response) {
 	} else if respBody.Code != 0 {
 		log.Warnf("http response not expected, url:%s, code:%d, content%s", url, respBody.Code, string(content))
 	}
+}
+
+// 任务运行完成后, 上报任务结果
+func ReportTaskResult(result, message string) {
+	body, err := json.Marshal(taskResultBody{
+		TaskId: CurrentTask.ID,
+		Result: result,
+		Message: message,
+	})
+	if err != nil {
+		log.Warnf("json encode err:%s", err.Error())
+		return
+	}
+
+	req, err := http.NewRequest("POST", config.Opt.HttpServer.AdminUrl+taskResultPath, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+	if err != nil {
+		log.Warnf("build http req err:%s", err.Error())
+		return
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Warnf("report offset to admin err:%s", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	dealHttpResponse(req.URL.String(), resp)
 }

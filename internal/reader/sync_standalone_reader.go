@@ -17,6 +17,7 @@ import (
 	"RedisShake/internal/entry"
 	"RedisShake/internal/log"
 	"RedisShake/internal/rdb"
+	"RedisShake/internal/status"
 	"RedisShake/internal/utils"
 	rotate "RedisShake/internal/utils/file_rotate"
 
@@ -35,8 +36,7 @@ type SyncReaderOptions struct {
 	Diskless      bool   `mapstructure:"disk_less" default:"true"`
 	ResumeOffset  int64  `mapstructure:"resume_offset" default:"0"`
 
-	ClusterName   string `mapstructure:"cluster_name" default:""`
-	PartitionName string `mapstructure:"partition_name" default:""`
+	config.ExtOptions `mapstructure:",squash"`
 }
 
 type State string
@@ -64,7 +64,7 @@ type syncStandaloneReader struct {
 		Address string `json:"address"`
 		Dir     string `json:"dir"`
 
-		ReplId  string `json:"repl_id"`
+		ReplId string `json:"repl_id"`
 
 		// status
 		Status State `json:"status"`
@@ -108,6 +108,9 @@ func (r *syncStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 	r.ctx = ctx
 	r.ch = make(chan *entry.Entry, 1024)
 	go func() {
+		// recovery error
+		defer reportErrorAfterRecover()
+
 		r.sendReplconfListenPort()
 		fullSync := r.sendPSync()
 		go r.sendReplconfAck() // start sent replconf ack
@@ -122,14 +125,18 @@ func (r *syncStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 				rdbFilePath := r.receiveRDBToFile()
 				r.sendRDBFromFile(rdbFilePath)
 			}
+			// 当rdb同步完成, 但不进行增量同步时, 上报任务完成给admin
+			if !r.opts.SyncAof {
+				reportRDBSyncFinish()
+			}
 		}
 
 		if r.opts.SyncAof {
 			r.stat.Status = kSyncAof
 			if r.opts.Diskless {
 				aofCh := make(chan []byte, 10)
-				go r.receiveAOFToBuf(r.rd, aofCh, r.stat.AofReceivedOffset)
-				r.sendAOFFromBuf(r.stat.AofReceivedOffset, aofCh)
+				go r.receiveAOFToBuf(r.rd, aofCh)
+				r.sendAOFFromBuf(aofCh)
 				close(aofCh)
 			} else {
 				// create aof file first
@@ -148,7 +155,7 @@ func (r *syncStandaloneReader) StartRead(ctx context.Context) chan *entry.Entry 
 	return r.ch
 }
 
-func(r *syncStandaloneReader) Close() {
+func (r *syncStandaloneReader) Close() {
 	r.client.Close()
 	if r.ch != nil {
 		close(r.ch)
@@ -249,6 +256,7 @@ func (r *syncStandaloneReader) receiveRDBToBuf(rdbCh chan<- []byte) {
 const bufSize int64 = 32 * 1024 * 1024 // 32MB
 
 func (r *syncStandaloneReader) receiveRDB(op func(buf []byte)) {
+	defer reportErrorAfterRecover()
 	log.Debugf("[%s] source db is doing bgsave.", r.stat.Name)
 	r.stat.Status = kWaitBgsave
 	timeStart := time.Now()
@@ -314,7 +322,7 @@ func (r *syncStandaloneReader) receiveAOFToFile(rd io.Reader, aofWriter *rotate.
 }
 
 // 接收aof数据，缓存到ch中
-func (r *syncStandaloneReader) receiveAOFToBuf(rd io.Reader, ch chan<- []byte, offset int64) {
+func (r *syncStandaloneReader) receiveAOFToBuf(rd io.Reader, ch chan<- []byte) {
 	log.Debugf("[%s] start receiving aof data to channel", r.stat.Name)
 	r.receiveAOF(rd, func(buf []byte) {
 		ch <- buf
@@ -322,6 +330,7 @@ func (r *syncStandaloneReader) receiveAOFToBuf(rd io.Reader, ch chan<- []byte, o
 }
 
 func (r *syncStandaloneReader) receiveAOF(rd io.Reader, op func(buf []byte)) {
+	defer reportErrorAfterRecover()
 	buf := make([]byte, 16*1024) // 16KB is enough for writing file
 	for {
 		select {
@@ -386,7 +395,7 @@ func (r *syncStandaloneReader) sendAOFFromFile(offset int64) {
 }
 
 // 中间这一层 主要负责解析aof字节
-func (r *syncStandaloneReader) sendAOFFromBuf(offset int64, ch <-chan []byte) {
+func (r *syncStandaloneReader) sendAOFFromBuf(ch <-chan []byte) {
 	reader := utils.NewChannelReader(ch)
 	r.client.SetBufioReader(bufio.NewReader(reader))
 	for {
@@ -394,7 +403,13 @@ func (r *syncStandaloneReader) sendAOFFromBuf(offset int64, ch <-chan []byte) {
 		case <-r.ctx.Done():
 			return
 		default:
-			argv := client.ArrayString(r.client.Receive())
+			reply, err := r.client.Receive()
+			if err != nil {
+				log.Warnf("ignore cmd err:%s", err.Error())
+				continue
+			}
+			//log.Debugf("[%s] parse cmd, reply=[%v], err=[%v]", r.stat.Name, reply, err)
+			argv := client.ArrayString(reply, err)
 			// TODO: 计算aof字节
 			//r.stat.AofSentOffset = aofReader.Offset()
 			r.sendAOF(argv)
@@ -502,4 +517,33 @@ func readLastReplOffset(dir string) int64 {
 	}
 	log.Infof("read repl offset:%d for increment sync", offset)
 	return offset
+}
+
+func reportErrorAfterRecover() {
+	if err := recover(); err != nil {
+		task := status.CurrentTask
+		if task == nil {
+			log.Warnf("can not get task info after recover, err:%v", err)
+			return
+		} else if task.Ctx.Err() != nil {
+			log.Warnf("task:%s had been canceled after recover, err:%v", task.ID, err)
+			return
+		}
+
+		log.Warnf("report a panic task:%s, err:%v", task.ID, err)
+		status.ReportTaskResult("interrupt", fmt.Sprintf("%v", err))
+		task.Cancel()
+		task = nil
+	}
+}
+
+// rdb同步完成
+func reportRDBSyncFinish() {
+	task := status.CurrentTask
+	if task == nil {
+		log.Warnf("can not get task info after rdb finish")
+		return
+	}
+	log.Infof("report task:%s rdb finish", task.ID)
+	status.ReportTaskResult("finish", "rdb finish")
 }

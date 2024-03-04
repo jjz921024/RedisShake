@@ -17,10 +17,7 @@ type syncClusterReader struct {
 
 func NewSyncClusterReader(opts *SyncReaderOptions) Reader {
 	addresses, _ := utils.GetRedisClusterNodes(opts.Address, opts.Username, opts.Password, opts.Tls, opts.PreferReplica)
-	log.Debugf("get redis cluster nodes:")
-	for _, address := range addresses {
-		log.Debugf("%s", address)
-	}
+	log.Infof("reader route to: %s", addresses)
 	rd := &syncClusterReader{}
 	for _, address := range addresses {
 		theOpts := *opts
@@ -79,5 +76,6 @@ func (rd *syncClusterReader) StatusConsistent() bool {
 }
 
 func (rd *syncClusterReader) IdOffset() (string, int64) {
-	panic("unimplemented")
+	//panic("unimplemented") TODO:
+	return "id", 1
 }

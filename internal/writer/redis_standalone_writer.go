@@ -23,8 +23,7 @@ type RedisWriterOptions struct {
 	Tls      bool   `mapstructure:"tls" default:"false"`
 	OffReply bool   `mapstructure:"off_reply" default:"false"`
 
-	ClusterName   string `mapstructure:"cluster_name" default:""`
-	PartitionName string `mapstructure:"partition_name" default:""`
+	config.ExtOptions `mapstructure:",squash"`
 }
 
 type redisStandaloneWriter struct {
@@ -108,6 +107,7 @@ func (w *redisStandaloneWriter) processReply() {
 				if config.Opt.Advanced.RDBRestoreCommandBehavior == "skip" {
 					log.Debugf("[%s] redisStandaloneWriter received BUSYKEY reply. cmd=[%s]", w.stat.Name, e.String())
 				} else if config.Opt.Advanced.RDBRestoreCommandBehavior == "panic" {
+					// TODO: 上报admin
 					log.Panicf("[%s] redisStandaloneWriter received BUSYKEY reply. cmd=[%s]", w.stat.Name, e.String())
 				}
 			} else {

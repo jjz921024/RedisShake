@@ -28,7 +28,9 @@ func StartHttpServer(opts *config.HttpServerOptions) *http.Server {
 	recovery := negroni.NewRecovery()
 	recovery.Formatter = &JsonFormatter{}
 	n.Use(recovery)
-	n.Use(negroni.NewLogger())
+	logger := negroni.NewLogger()
+	logger.SetFormat("{{.StartTime}} | {{.Status}} | \t {{.Duration}} | {{.Request.RemoteAddr}} | {{.Method}} {{.Path}}")
+	n.Use(logger)
 	n.UseHandler(mux)
 
 	httpSvr := &http.Server{
@@ -46,19 +48,6 @@ func StartHttpServer(opts *config.HttpServerOptions) *http.Server {
 
 	log.Infof("http server listen on:%d", opts.HttpPort)
 	return httpSvr
-}
-
-type JsonFormatter struct{}
-
-func (t *JsonFormatter) FormatPanicError(rw http.ResponseWriter, r *http.Request, infos *negroni.PanicInformation) {
-	if rw.Header().Get("Content-Type") != "application/json" {
-		rw.Header().Set("Content-Type", "application/json")
-	}
-	resp, _ := json.Marshal(httpResponse{
-		Code:    -1,
-		Message: infos.StackAsString(),
-	})
-	_, _ = rw.Write(resp)
 }
 
 type httpResponse struct {
